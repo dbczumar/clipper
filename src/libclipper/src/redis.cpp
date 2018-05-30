@@ -169,7 +169,8 @@ std::vector<VersionedModelId> str_to_models(const std::string& model_str) {
   return models;
 }
 
-std::vector<VersionedModelId> str_to_model_configs(const std::string& model_configs_str) {
+std::vector<std::unordered_map<std::string, std::string>> str_to_model_configs(
+    const std::string& model_configs_str) {
   std::vector<std::unordered_map<std::string, std::string>> model_configs;
 
   auto delim_start = 0;
@@ -193,8 +194,8 @@ std::vector<VersionedModelId> str_to_model_configs(const std::string& model_conf
 
     size_t key_idx = 0;
     while (end != string::npos) {
-      config_key = SORTED_MODEL_CONFIG_KEYS[key_idx];
-      config_value = serialized_config.substr(start, end - start);
+      const std::string config_key = SORTED_MODEL_CONFIG_KEYS[key_idx];
+      const std::string config_value = serialized_config.substr(start, end - start);
       model_config.emplace(config_key, config_value);
 
       start = end + ITEM_PART_CONCATENATOR.length();
@@ -203,8 +204,8 @@ std::vector<VersionedModelId> str_to_model_configs(const std::string& model_conf
       key_idx += 1;
     }
     // Tail case
-    config_key = SORTED_MODEL_CONFIG_KEYS[key_idx];
-    config_value = serialized_config.substr(start, end - start);
+    const std::string config_key = SORTED_MODEL_CONFIG_KEYS[key_idx];
+    const std::string config_value = serialized_config.substr(start, end - start);
     model_config.emplace(config_key, config_value);
 
     model_configs.push_back(model_config);
@@ -272,36 +273,58 @@ std::vector<std::string> get_linked_models(redox::Redox& redis,
   return linked_models;
 }
 
-std::string get_endpoint(redox::Redox& redis,
-                         const long serving_module_id) {
-  std::string serving_module_id_key = std::to_string(serving_module_id)
-
-  std::vector<std::string> linked_endpoints;
+std::vector<long> get_linked_serving_modules(redox::Redox& redis,
+                                             const std::string& endpoint_name) {
+  std::vector<std::string> raw_linked_serving_modules;
   if (send_cmd_no_reply<string>(
           redis, {"SELECT", std::to_string(REDIS_ENDPOINT_MODULES_LINKS_DB_NUM)})) {
     auto result =
-        send_cmd_with_reply<std::vector<string>>(redis, {"SMEMBERS", serving_module_id_key});
+        send_cmd_with_reply<std::vector<std::string>>(redis, {"SMEMBERS", endpoint_name});
     if (result) {
-      linked_endpoints = *result;
+      raw_linked_serving_modules = *result;
+    } else {
+      log_error_formatted(LOGGING_TAG_REDIS,
+                          "Found no linked serving modules for endpoint {}", endpoint_name);
+    }
+  } else {
+    log_error_formatted(
+        LOGGING_TAG_REDIS,
+        "Redis encountered an error in searching for serving module links associated with endpoint: {}",
+        endpoint_name);
+  }
+
+  std::vector<long> linked_serving_modules;
+  linked_serving_modules.reserve(raw_linked_serving_modules.size());
+  for (const std::string raw_module_id : raw_linked_serving_modules) {
+    long module_id = std::stol(raw_module_id);
+    linked_serving_modules.push_back(module_id);
+  }
+
+  return linked_serving_modules;
+}
+
+boost::optional<std::string> get_endpoint(redox::Redox& redis,
+                                          const long serving_module_id) {
+  std::string serving_module_id_key = std::to_string(serving_module_id);
+
+  if (send_cmd_no_reply<string>(
+          redis, {"SELECT", std::to_string(REDIS_MODULE_ENDPOINT_LINKS_DB)})) {
+    auto result =
+        send_cmd_with_reply<string>(redis, {"GET", serving_module_id_key});
+    if (result) {
+      return *result;
     } else {
       log_error_formatted(LOGGING_TAG_REDIS,
                           "Found no linked endpoint for serving module id {}", serving_module_id_key);
+      return boost::optional<std::string>();
     }
   } else {
     log_error_formatted(
         LOGGING_TAG_REDIS,
         "Redis encountered an error in searching for endpoint links for {}",
         serving_module_id_key);
+    return boost::optional<std::string>();
   }
-
-  if (linked_endpoints.size() != 1) {
-    std::stringstream ss;
-    ss << "Expected to find exactly one linked endpoint for serving module id: " << serving_module_id
-       << ", found: " << linked_endpoints.size() << " instead";
-    throw std::runtime_error(ss.str());
-  }
-
-  return linked_endpoints[0];
 }
 
 bool add_model(Redox& redis, const VersionedModelId& model_id,
@@ -598,6 +621,7 @@ std::unordered_map<std::string, std::string> get_endpoint(
     std::vector<std::string> container_data;
     auto result = send_cmd_with_reply<std::vector<std::string>>(
         redis, {"HGETALL", endpoint_name});
+    std::vector<std::string> endpoint_data;
     if (result) {
       endpoint_data = *result;
     }
@@ -684,6 +708,14 @@ void subscribe_to_model_link_changes(
     std::function<void(const std::string&, const std::string&)> callback) {
   std::string prefix = "";
   subscribe_to_keyspace_changes(REDIS_APP_MODEL_LINKS_DB_NUM, prefix,
+                                subscriber, std::move(callback));
+}
+
+void subscribe_to_endpoint_module_link_changes(
+    redox::Subscriber& subscriber,
+    std::function<void(const std::string&, const std::string&)> callback) {
+  std::string prefix = "";
+  subscribe_to_keyspace_changes(REDIS_ENDPOINT_MODULES_LINKS_DB_NUM, prefix,
                                 subscriber, std::move(callback));
 }
 

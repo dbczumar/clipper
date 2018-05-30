@@ -39,8 +39,8 @@ def _pass_conflicts():
 class KubernetesContainerManager(ContainerManager):
     def __init__(self,
                  kubernetes_proxy_addr=None,
-                 redis_ip=None,
-                 redis_port=6379,
+                 redis_ip,
+                 redis_port,
                  useInternalIP=False):
         """
 
@@ -51,12 +51,10 @@ class KubernetesContainerManager(ContainerManager):
             If this argument is provided, Clipper will construct the appropriate proxy
             URLs for accessing Clipper's Kubernetes services, rather than using the API server
             addres provided in your kube config.
-        redis_ip : str, optional
-            The address of a running Redis cluster. If set to None, Clipper will start
-            a Redis deployment for you.
-        redis_port : int, optional
-            The Redis port. If ``redis_ip`` is set to None, Clipper will start Redis on this port.
-            If ``redis_ip`` is provided, Clipper will connect to Redis on this port.
+        redis_ip : str 
+            The address of a running Redis cluster. Clipper will connect to redis at this address. 
+        redis_port : int 
+            Clipper will connect to Redis on this port.
         useInternalIP : bool, optional
             Use Internal IP of the K8S nodes . If ``useInternalIP`` is set to False, Clipper will
             throw an exception if none of the nodes have ExternalDNS.
@@ -70,6 +68,10 @@ class KubernetesContainerManager(ContainerManager):
         we recommend configuring your own persistent and replicated Redis cluster rather than
         letting Clipper launch one for you.
         """
+
+        # Redis ip and port must be specified!
+        assert redis_ip is not None
+        assert redis_port is not None
 
         if kubernetes_proxy_addr is not None:
             self.kubernetes_proxy_addr = kubernetes_proxy_addr
@@ -93,43 +95,22 @@ class KubernetesContainerManager(ContainerManager):
                       num_frontend_replicas=1):
         self.num_frontend_replicas = num_frontend_replicas
 
-        # If an existing Redis service isn't provided, start one
-        if self.redis_ip is None:
-            name = 'redis'
-            with _pass_conflicts():
-                self._k8s_beta.create_namespaced_deployment(
-                    body=yaml.load(
-                        open(
-                            os.path.join(cur_dir,
-                                         '{}-deployment.yaml'.format(name)))),
-                    namespace='default')
-
-            with _pass_conflicts():
-                body = yaml.load(
-                    open(
-                        os.path.join(cur_dir, '{}-service.yaml'.format(name))))
-                body["spec"]["ports"][0]["port"] = self.redis_port
-                self._k8s_v1.create_namespaced_service(
-                    body=body, namespace='default')
-            time.sleep(10)
-
-        for name, img in zip(['mgmt-frontend', 'query-frontend'],
-                             [mgmt_frontend_image, query_frontend_image]):
+        for name, img in zip(['query-frontend'],
+                             [query_frontend_image]):
             with _pass_conflicts():
                 body = yaml.load(
                     open(
                         os.path.join(cur_dir,
                                      '{}-deployment.yaml'.format(name))))
-                if self.redis_ip is not None:
-                    args = [
-                        "--redis_ip={}".format(self.redis_ip),
-                        "--redis_port={}".format(self.redis_port)
-                    ]
-                    if name is 'query-frontend':
-                        args.append(
-                            "--prediction_cache_size={}".format(cache_size))
-                    body["spec"]["template"]["spec"]["containers"][0][
-                        "args"] = args
+                args = [
+                    "--redis_ip={}".format(self.redis_ip),
+                    "--redis_port={}".format(self.redis_port)
+                ]
+                if name is 'query-frontend':
+                    args.append(
+                        "--prediction_cache_size={}".format(cache_size))
+                body["spec"]["template"]["spec"]["containers"][0][
+                    "args"] = args
                 body["spec"]["template"]["spec"]["containers"][0][
                     "image"] = img
 
@@ -210,14 +191,6 @@ class KubernetesContainerManager(ContainerManager):
             nodes=", ".join(external_node_hosts)))
 
         try:
-            mgmt_frontend_ports = self._k8s_v1.read_namespaced_service(
-                name="mgmt-frontend", namespace='default').spec.ports
-            for p in mgmt_frontend_ports:
-                if p.name == "1338":
-                    self.clipper_management_port = p.node_port
-                    logger.info("Setting Clipper mgmt port to {}".format(
-                        self.clipper_management_port))
-
             query_frontend_ports = self._k8s_v1.read_namespaced_service(
                 name="query-frontend", namespace='default').spec.ports
             for p in query_frontend_ports:

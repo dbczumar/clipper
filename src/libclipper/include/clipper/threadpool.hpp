@@ -393,6 +393,27 @@ inline auto submit_job(Func&& func, Args&&... args) {
 }
 }  // namespace GarbageCollectionThreadPool
 
+namespace ActiveContainerCallbacksThreadPool {
+/**
+ * Convenience method to get the active container callbacks thread pool for the
+ * application
+ */
+
+inline FixedSizeThreadPool& get_thread_pool(void) {
+  static FixedSizeThreadPool container_callbacks_pool(6, true);
+  return container_callbacks_pool;
+}
+
+/**
+ * Submit a job to the active container callbacks thread pool
+ */
+template <typename Func, typename... Args>
+inline auto submit_job(Func&& func, Args&&... args) {
+  return get_thread_pool().submit(std::forward<Func>(func),
+                                  std::forward<Args>(args)...);
+}
+}  // namespace ActiveContainerCallbacksThreadPool 
+
 }  // namespace clipper
 
 #endif  // CLIPPER_LIB_THREADPOOL_HPP

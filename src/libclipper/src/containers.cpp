@@ -9,6 +9,7 @@
 #include <clipper/logging.hpp>
 #include <clipper/metrics.hpp>
 #include <clipper/util.hpp>
+#include <clipper/threadpool.hpp>
 
 #include <boost/circular_buffer.hpp>
 
@@ -112,6 +113,14 @@ ActiveContainers::ActiveContainers()
                              std::map<int, std::shared_ptr<ModelContainer>>>(
               {})) {}
 
+
+      
+void ActiveContainers::register_new_container_callback(
+      const std::function<void(std::shared_ptr<ModelContainer>)> callback) {
+  callbacks_.push_back(std::move(callback));
+}
+
+
 void ActiveContainers::add_container(VersionedModelId model, int connection_id,
                                      int replica_id, InputType input_type) {
   log_info_formatted(LOGGING_TAG_CONTAINERS,
@@ -135,6 +144,10 @@ void ActiveContainers::add_container(VersionedModelId model, int connection_id,
   containers_[new_container->model_] = entry;
   assert(containers_[new_container->model_].size() > 0);
   log_active_containers();
+
+  for (const auto &callback : callbacks_) {
+    ActiveContainerCallbacksThreadPool::submit_job(callback, new_container);
+  }
 }
 
 void ActiveContainers::remove_container(VersionedModelId model,

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <sstream>
@@ -164,49 +165,84 @@ class RequestHandler {
                            respond_http(metrics_report, "200 OK", response);
                          });
 
-    clipper::redis::subscribe_to_application_changes(
+    clipper::redis::subscribe_to_endpoint_module_link_changes(
         redis_subscriber_,
         [this](const std::string& key, const std::string& event_type) {
+          std::string endpoint_name = key;
           clipper::log_info_formatted(
               LOGGING_TAG_QUERY_FRONTEND,
-              "APPLICATION EVENT DETECTED. Key: {}, event_type: {}", key,
-              event_type);
-          if (event_type == "hset") {
-            std::string name = key;
-            clipper::log_info_formatted(LOGGING_TAG_QUERY_FRONTEND,
-                                        "New application detected: {}", key);
-            auto app_info =
-                clipper::redis::get_application_by_key(redis_connection_, key);
-            InputType input_type =
-                clipper::parse_input_type(app_info["input_type"]);
-            std::string policy = app_info["policy"];
-            std::string default_output = app_info["default_output"];
-            int latency_slo_micros = std::stoi(app_info["latency_slo_micros"]);
-            add_application(name, input_type, policy, default_output,
-                            latency_slo_micros);
-          } else if (event_type == "hdel") {
-            std::string name = key;
-            delete_application(name);
-          }
-        });
-
-    clipper::redis::subscribe_to_model_link_changes(
-        redis_subscriber_,
-        [this](const std::string& key, const std::string& event_type) {
-          std::string app_name = key;
-          clipper::log_info_formatted(
-              LOGGING_TAG_QUERY_FRONTEND,
-              "APP LINKS EVENT DETECTED. App name: {}, event_type: {}",
-              app_name, event_type);
+              "ENDPOINT LINKS EVENT DETECTED. Endpoint name: {}, event_type: {}",
+              endpoint_name, event_type);
           if (event_type == "sadd") {
             clipper::log_info_formatted(LOGGING_TAG_QUERY_FRONTEND,
-                                        "New model link detected for app: {}",
-                                        app_name);
-            auto linked_model_names =
-                clipper::redis::get_linked_models(redis_connection_, app_name);
-            set_linked_models_for_app(app_name, linked_model_names);
+                                        "New serving module link detected for endpoint: {}",
+                                        endpoint_name);
+            clipper::Config& conf = clipper::get_config();
+
+            std::vector<long> linked_serving_modules = 
+                   clipper::redis::get_linked_serving_modules(redis_connection_, endpoint_name);
+
+            if (std::find(linked_serving_modules.begin(), linked_serving_modules.end(), conf.get_serving_module_id())
+                  != linked_serving_modules.end()) {
+              
+              std::unordered_map<std::string, std::string> endpoint_info = 
+                clipper::redis::get_endpoint(redis_connection_, endpoint_name);
+
+              if (endpoint_info.empty()) {
+                std::stringstream ss;
+                ss << "Failed to find metadata corresponding to the endpoint with name " << endpoint_name 
+                   << ", despite the fact that the endpoint has linked serving modules";
+                throw std::runtime_error(ss.str());
+              }
+
+              update_endpoint_info(std::move(endpoint_info));
+            }
           }
         });
+    
+    // clipper::redis::subscribe_to_application_changes(
+    //     redis_subscriber_,
+    //     [this](const std::string& key, const std::string& event_type) {
+    //       clipper::log_info_formatted(
+    //           LOGGING_TAG_QUERY_FRONTEND,
+    //           "APPLICATION EVENT DETECTED. Key: {}, event_type: {}", key,
+    //           event_type);
+    //       if (event_type == "hset") {
+    //         std::string name = key;
+    //         clipper::log_info_formatted(LOGGING_TAG_QUERY_FRONTEND,
+    //                                     "New application detected: {}", key);
+    //         auto app_info =
+    //             clipper::redis::get_application_by_key(redis_connection_, key);
+    //         InputType input_type =
+    //             clipper::parse_input_type(app_info["input_type"]);
+    //         std::string policy = app_info["policy"];
+    //         std::string default_output = app_info["default_output"];
+    //         int latency_slo_micros = std::stoi(app_info["latency_slo_micros"]);
+    //         add_application(name, input_type, policy, default_output,
+    //                         latency_slo_micros);
+    //       } else if (event_type == "hdel") {
+    //         std::string name = key;
+    //         delete_application(name);
+    //       }
+    //     });
+
+    // clipper::redis::subscribe_to_model_link_changes(
+    //     redis_subscriber_,
+    //     [this](const std::string& key, const std::string& event_type) {
+    //       std::string app_name = key;
+    //       clipper::log_info_formatted(
+    //           LOGGING_TAG_QUERY_FRONTEND,
+    //           "APP LINKS EVENT DETECTED. App name: {}, event_type: {}",
+    //           app_name, event_type);
+    //       if (event_type == "sadd") {
+    //         clipper::log_info_formatted(LOGGING_TAG_QUERY_FRONTEND,
+    //                                     "New model link detected for app: {}",
+    //                                     app_name);
+    //         auto linked_model_names =
+    //             clipper::redis::get_linked_models(redis_connection_, app_name);
+    //         set_linked_models_for_app(app_name, linked_model_names);
+    //       }
+    //     });
 
     clipper::redis::subscribe_to_model_version_changes(
         redis_subscriber_,
@@ -231,40 +267,16 @@ class RequestHandler {
           }
         });
 
-    // Read from Redis configuration tables to obtain endpoint metadata for
+    // (1) Read from Redis configuration tables to obtain endpoint metadata for
     // the serving module associated with this query frontend
-  
     std::unordered_map<std::string, std::string> endpoint_info = get_endpoint_info();
 
-    std::string endpoint_name = endpoint_info[REDIS_KEY_ENDPOINT_NAME];
-
-    std::string serialized_model_configs = endpoint_info[REDIS_KEY_ENDPOINT_MODEL_CONFIGS];
-    std::vector<std::unordered_map<std::string, std::string>> parsed_model_configs = 
-      clipper::redis::str_to_model_configs(serialized_model_configs);
-
-    // Temporarily restrict endpoints to hosting a single model (we will need to remove this restriction)
-    if (parsed_model_configs.size() > 1) {
-      std::stringstream ss;
-      ss << "Expected a single model configuration for this query frontend but found: " 
-         << parsed_model_configs.size() << " configs";
-      throw std::runtime_error(ss.str());
+    if (!endpoint_info.empty()) {
+      update_endpoint_info(std::move(endpoint_info));
     }
 
-    std::string model_name = parsed_model_configs[0][MODEL_CONFIG_KEY_MODEL_NAME];
-    std::vector<std::string> linked_model_names{ model_name };
-    InputType input_type = clipper::parse_input_type(endpoint_info[REDIS_KEY_ENDPOINT_INPUT_TYPE]);
-    long latency_slo_micros = std::stol(endpoint_info[REDIS_KEY_ENDPOINT_LATENCY_SLO]);
-    
-    std::string policy =
-        clipper::DefaultOutputSelectionPolicy::get_name();
-    std::string default_output = "default output";
-  
-    set_linked_models_for_app(endpoint_name, linked_model_names);
-    add_application(endpoint_name, input_type, policy, default_output,
-                    latency_slo_micros);
-
     // Read from Redis configuration tables and update models/applications.
-    // (1) Iterate through applications and set up predict/update endpoints.
+    // Iterate through applications and set up predict/update endpoints.
 
     // std::vector<std::string> app_names =
     //     clipper::redis::get_all_application_names(redis_connection_);
@@ -293,30 +305,30 @@ class RequestHandler {
 
     // (2) Update current_model_versions_ with (model, version) pairs.
 
-    // std::vector<std::string> model_names =
-    //     clipper::redis::get_all_model_names(redis_connection_);
-    // // Record human-readable model names for logging
-    // std::vector<std::string> model_names_with_version;
-    // for (std::string model_name : model_names) {
-    //   auto model_version = clipper::redis::get_current_model_version(
-    //       redis_connection_, model_name);
-    //   if (model_version) {
-    //     std::unique_lock<std::mutex> l(current_model_versions_mutex_);
-    //     current_model_versions_[model_name] = *model_version;
-    //     model_names_with_version.push_back(model_name + "@" + *model_version);
-    //   } else {
-    //     clipper::log_error_formatted(
-    //         LOGGING_TAG_QUERY_FRONTEND,
-    //         "Found model {} with missing current version.", model_name);
-    //     throw std::runtime_error("Invalid model version");
-    //   }
-    // }
-    // if (model_names.size() > 0) {
-    //   clipper::log_info_formatted(LOGGING_TAG_QUERY_FRONTEND,
-    //                               "Found {} models deployed to Clipper: {}.",
-    //                               model_names.size(),
-    //                               labels_to_str(model_names_with_version));
-    // }
+    std::vector<std::string> model_names =
+        clipper::redis::get_all_model_names(redis_connection_);
+    // Record human-readable model names for logging
+    std::vector<std::string> model_names_with_version;
+    for (std::string model_name : model_names) {
+      auto model_version = clipper::redis::get_current_model_version(
+          redis_connection_, model_name);
+      if (model_version) {
+        std::unique_lock<std::mutex> l(current_model_versions_mutex_);
+        current_model_versions_[model_name] = *model_version;
+        model_names_with_version.push_back(model_name + "@" + *model_version);
+      } else {
+        clipper::log_error_formatted(
+            LOGGING_TAG_QUERY_FRONTEND,
+            "Found model {} with missing current version.", model_name);
+        throw std::runtime_error("Invalid model version");
+      }
+    }
+    if (model_names.size() > 0) {
+      clipper::log_info_formatted(LOGGING_TAG_QUERY_FRONTEND,
+                                  "Found {} models deployed to Clipper: {}.",
+                                  model_names.size(),
+                                  labels_to_str(model_names_with_version));
+    }
   }
 
   ~RequestHandler() {
@@ -333,6 +345,10 @@ class RequestHandler {
   std::vector<std::string> get_linked_models_for_app(std::string name) {
     std::unique_lock<std::mutex> l(linked_models_for_apps_mutex_);
     return linked_models_for_apps_[name];
+  }
+
+  void clear_applications() {
+
   }
 
   void add_application(std::string name, InputType input_type,
@@ -703,13 +719,47 @@ class RequestHandler {
   }
 
  private:
-  std::unordered_map<std::string, std::string> get_endpoint_info() const {
+  std::unordered_map<std::string, std::string> get_endpoint_info() {
     clipper::Config& conf = clipper::get_config();
     long serving_module_id = conf.get_serving_module_id();
 
-    std::string endpoint_name = clipper::redis::get_endpoint(redis_connection_, serving_module_id); 
-    std::unordered_map<std::string, std::string> endpoint_info = clipper::redis::get_endpoint(redis_connection_, endpoint_name);
-    return endpoint_info;
+    boost::optional<std::string> endpoint_name = clipper::redis::get_endpoint(redis_connection_, serving_module_id); 
+    if (endpoint_name) {
+      std::unordered_map<std::string, std::string> endpoint_info = clipper::redis::get_endpoint(redis_connection_, endpoint_name.get());
+      return endpoint_info;
+    } else {
+      return std::unordered_map<std::string, std::string>{};
+    }
+  }
+
+  void update_endpoint_info(std::unordered_map<std::string, std::string> new_endpoint_info) {
+      std::string endpoint_name = new_endpoint_info[clipper::REDIS_KEY_ENDPOINT_NAME];
+
+      std::string serialized_model_configs = new_endpoint_info[clipper::REDIS_KEY_ENDPOINT_MODEL_CONFIGS];
+      std::vector<std::unordered_map<std::string, std::string>> parsed_model_configs = 
+        clipper::redis::str_to_model_configs(serialized_model_configs);
+
+      // Temporarily restrict endpoints to hosting a single model (we will need to remove this restriction)
+      if (parsed_model_configs.size() > 1) {
+        std::stringstream ss;
+        ss << "Expected a single model configuration for this query frontend but found: " 
+           << parsed_model_configs.size() << " configs";
+        throw std::runtime_error(ss.str());
+      }
+
+      std::string model_name = parsed_model_configs[0][clipper::MODEL_CONFIG_KEY_MODEL_NAME];
+      std::vector<std::string> linked_model_names{ model_name };
+      InputType input_type = clipper::parse_input_type(
+          new_endpoint_info[clipper::REDIS_KEY_ENDPOINT_INPUT_TYPE]);
+      long latency_slo_micros = std::stol(new_endpoint_info[clipper::REDIS_KEY_ENDPOINT_LATENCY_SLO]);
+      
+      std::string policy =
+          clipper::DefaultOutputSelectionPolicy::get_name();
+      std::string default_output = "default output";
+    
+      set_linked_models_for_app(endpoint_name, linked_model_names);
+      add_application(endpoint_name, input_type, policy, default_output,
+                      latency_slo_micros);
   }
 
   HttpServer server_;

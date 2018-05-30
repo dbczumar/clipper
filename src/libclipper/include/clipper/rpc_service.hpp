@@ -82,6 +82,7 @@ class RPCService {
    */
   void start(
       const string ip, const int port,
+      std::shared_ptr<ActiveContainers> active_containers,
       std::function<void(VersionedModelId, int)> &&container_ready_callback,
       std::function<void(RPCResponse &)> &&new_response_callback,
       std::function<void(VersionedModelId, int)> &&inactive_container_callback);
@@ -135,8 +136,7 @@ class RPCService {
       std::unordered_map<std::vector<uint8_t>, ConnectedContainerInfo,
                          std::function<size_t(const std::vector<uint8_t> &vec)>>
           &connections_containers_map,
-      uint32_t &zmq_connection_id,
-      std::shared_ptr<redox::Redox> redis_connection);
+      uint32_t &zmq_connection_id);
 
   void send_heartbeat_response(socket_t &socket,
                                const vector<uint8_t> &connection_id,
@@ -152,6 +152,8 @@ class RPCService {
   std::chrono::system_clock::time_point last_activity_check_time_;
   std::unordered_map<VersionedModelId, int> replica_ids_;
   std::shared_ptr<metrics::Histogram> msg_queueing_hist_;
+
+  std::shared_ptr<ActiveContainers> active_containers_;
   std::function<void(VersionedModelId, int)> container_ready_callback_;
   std::function<void(RPCResponse &)> new_response_callback_;
 

@@ -105,7 +105,8 @@ std::string models_to_str(const std::vector<VersionedModelId>& models);
 
 std::vector<VersionedModelId> str_to_models(const std::string& model_str);
 
-std::vector<VersionedModelId> str_to_model_configs(const std::string& model_configs_str);
+std::vector<std::unordered_map<std::string, std::string>> str_to_model_configs(
+    const std::string& model_configs_str);
 
 bool set_current_model_version(redox::Redox& redis,
                                const std::string& model_name,
@@ -201,11 +202,19 @@ std::vector<std::string> get_linked_models(redox::Redox& redis,
                                            const std::string& app_name);
 
 /**
+ * Looks up which serving modules are linked to the endpoint with name `endpoint_name`
+ * \return Returns a vector of serving modules ids. If no serving modules are linked
+ * to the specified endpoint, then an empty vector will be returned.
+ */
+std::vector<long> get_linked_serving_modules(redox::Redox& redis,
+                                                    const std::string& endpoint_name);
+
+/**
  * Obtains the name of the endpoint associated with the specified serving
  * module id
  */
-std::string get_endpoint(redox::Redox& redis,
-                         const long serving_module_id);
+boost::optional<std::string> get_endpoint(redox::Redox& redis,
+                                          const long serving_module_id);
 
 /**
  * Adds a container into the container table. This will
@@ -405,6 +414,18 @@ void subscribe_to_endpoint_changes(
  * to differentiate between adds and deletes if necessary.
  */
 void subscribe_to_model_link_changes(
+    redox::Subscriber& subscriber,
+    std::function<void(const std::string&, const std::string&)> callback);
+
+/**
+ * Subscribes to changes in the endpoint-module link table. The
+ * callback is called with the string key of the endpoint 
+ * that changed and the Redis event type. The key can
+ * be used to look up the new value. The message type identifies
+ * what type of change was detected. This allows subscribers
+ * to differentiate between adds and deletes if necessary.
+ */
+void subscribe_to_endpoint_module_link_changes(
     redox::Subscriber& subscriber,
     std::function<void(const std::string&, const std::string&)> callback);
 

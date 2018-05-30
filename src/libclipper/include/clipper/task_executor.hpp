@@ -229,8 +229,46 @@ class TaskExecutor {
         model_queues_({}),
         model_metrics_({}) {
     log_info(LOGGING_TAG_TASK_EXECUTOR, "TaskExecutor started");
+
+    active_containers_->register_new_container_callback(
+        [this, task_executor_valid = active_](std::shared_ptr<ModelContainer> new_container) {
+            if(!*task_executor_valid) {
+              log_info(LOGGING_TAG_TASK_EXECUTOR,
+                       "Not running TaskExecutor's "
+                       "new container callback because "
+                       "TaskExecutor has been destroyed.");
+            }
+            VersionedModelId &vm = new_container->model_;
+            int replica_id = new_container->replica_id_;
+
+            auto model_info = redis::get_model(redis_connection_, vm);
+
+            int batch_size = DEFAULT_BATCH_SIZE;
+            auto batch_size_search = model_info.find("batch_size");
+            if (batch_size_search != model_info.end()) {
+              batch_size = std::stoi(batch_size_search->second);
+            }
+            active_containers_->register_batch_size(vm, batch_size);
+
+            TaskExecutionThreadPool::create_queue(vm, replica_id);
+            TaskExecutionThreadPool::submit_job(
+                vm, replica_id, 
+                [this, vm, replica_id]() {
+                  on_container_ready(vm, replica_id);
+                });
+            bool created_queue = create_model_queue_if_necessary(vm);
+            if (created_queue) {
+              log_info_formatted(LOGGING_TAG_TASK_EXECUTOR,
+                                 "Created queue for new model: {} : {}",
+                                 vm.get_name(), vm.get_id());
+            }
+        });
+
+
     rpc_->start(
-        "*", RPC_SERVICE_PORT, [ this, task_executor_valid = active_ ](
+        "*", RPC_SERVICE_PORT,
+        active_containers_,
+        [ this, task_executor_valid = active_ ](
                                    VersionedModelId model, int replica_id) {
           if (*task_executor_valid) {
             on_container_ready(model, replica_id);
@@ -298,49 +336,6 @@ class TaskExecutor {
       }
     });
 
-    redis::subscribe_to_container_changes(
-        redis_subscriber_,
-        // event_type corresponds to one of the Redis event types
-        // documented in https://redis.io/topics/notifications.
-        [ this, task_executor_valid = active_ ](const std::string &key,
-                                                const std::string &event_type) {
-          if (event_type == "hset" && *task_executor_valid) {
-            auto container_info =
-                redis::get_container_by_key(redis_connection_, key);
-            VersionedModelId vm = VersionedModelId(
-                container_info["model_name"], container_info["model_version"]);
-            int replica_id = std::stoi(container_info["model_replica_id"]);
-            active_containers_->add_container(
-                vm, std::stoi(container_info["zmq_connection_id"]), replica_id,
-                parse_input_type(container_info["input_type"]));
-
-            auto model_info = redis::get_model(redis_connection_, vm);
-
-            int batch_size = DEFAULT_BATCH_SIZE;
-            auto batch_size_search = model_info.find("batch_size");
-            if (batch_size_search != model_info.end()) {
-              batch_size = std::stoi(batch_size_search->second);
-            }
-            active_containers_->register_batch_size(vm, batch_size);
-
-            TaskExecutionThreadPool::create_queue(vm, replica_id);
-            TaskExecutionThreadPool::submit_job(
-                vm, replica_id, [this, vm, replica_id]() {
-                  on_container_ready(vm, replica_id);
-                });
-            bool created_queue = create_model_queue_if_necessary(vm);
-            if (created_queue) {
-              log_info_formatted(LOGGING_TAG_TASK_EXECUTOR,
-                                 "Created queue for new model: {} : {}",
-                                 vm.get_name(), vm.get_id());
-            }
-          } else if (!*task_executor_valid) {
-            log_info(LOGGING_TAG_TASK_EXECUTOR,
-                     "Not running TaskExecutor's "
-                     "subscribe_to_container_changes callback because "
-                     "TaskExecutor has been destroyed.");
-          }
-        });
     throughput_meter_ = metrics::MetricsRegistry::get_metrics().create_meter(
         "internal:aggregate_model_throughput");
     predictions_counter_ =

@@ -117,7 +117,7 @@ struct Config {
     }
 
     assert(readable_);
-    return serving_module_id;
+    return serving_module_id_;
   }
 
   void set_serving_module_id(long serving_module_id) {

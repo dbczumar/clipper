@@ -15,7 +15,7 @@ int main(int argc, char* argv[]) {
     ("redis_port", "Redis port",
         cxxopts::value<int>()->default_value(std::to_string(clipper::DEFAULT_REDIS_PORT)))
     ("prediction_cache_size", "Size of the prediction cache in bytes, excluding cache metadata",
-       cxxopts::value<long>()->default_value(std::to_string(clipper::DEFAULT_PREDICTION_CACHE_SIZE_BYTES))),
+       cxxopts::value<long>()->default_value(std::to_string(clipper::DEFAULT_PREDICTION_CACHE_SIZE_BYTES)))
     ("serving_module_id", "The id of the serving module associated with this query frontend",
        cxxopts::value<long>());  
   // clang-format on
@@ -25,7 +25,7 @@ int main(int argc, char* argv[]) {
   conf.set_redis_address(options["redis_ip"].as<std::string>());
   conf.set_redis_port(options["redis_port"].as<int>());
   conf.set_prediction_cache_size(options["prediction_cache_size"].as<long>());
-  conf.set_serving_module_id(options["set_serving_module_id"].as<long>());
+  conf.set_serving_module_id(options["serving_module_id"].as<long>());
   conf.ready();
 
   query_frontend::RequestHandler<clipper::QueryProcessor> rh(

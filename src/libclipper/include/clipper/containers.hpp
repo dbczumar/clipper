@@ -69,6 +69,9 @@ class ActiveContainers {
   ActiveContainers(ActiveContainers &&) = default;
   ActiveContainers &operator=(ActiveContainers &&) = default;
 
+  void register_new_container_callback(
+      const std::function<void(std::shared_ptr<ModelContainer>)> callback);
+
   void add_container(VersionedModelId model, int connection_id, int replica_id,
                      InputType input_type);
 
@@ -103,6 +106,8 @@ class ActiveContainers {
   std::unordered_map<VersionedModelId,
                      std::map<int, std::shared_ptr<ModelContainer>>>
       containers_;
+
+  std::vector<std::function<void(std::shared_ptr<ModelContainer>)>> callbacks_;
 };
 }  // namespace clipper
 
