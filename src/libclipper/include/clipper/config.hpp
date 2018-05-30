@@ -110,11 +110,37 @@ struct Config {
     prediction_cache_size_bytes_ = size_bytes;
   }
 
+  long get_serving_module_id() const {
+    if (!readable_) {
+      // TODO: use a better exception
+      throw std::logic_error("Cannot read Config until ready");
+    }
+
+    assert(readable_);
+    return serving_module_id;
+  }
+
+  void set_serving_module_id(long serving_module_id) {
+    if (readable_) {
+      // TODO: use a better exception
+      throw std::logic_error("Cannot write to Config after ready");
+    }
+    assert(!readable_);
+    if (serving_module_id < 0) {
+      std::stringstream ss;
+      ss << "Serving module id cannot be negative! Attempted to set a "
+            "value of " << serving_module_id;
+      throw std::invalid_argument(ss.str());
+    }
+    serving_module_id_ = serving_module_id;
+  }
+
  private:
   bool readable_;
   std::string redis_address_;
   int redis_port_;
   long prediction_cache_size_bytes_;
+  long serving_module_id_;
 };
 
 inline Config& get_config() {

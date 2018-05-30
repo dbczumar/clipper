@@ -105,6 +105,8 @@ std::string models_to_str(const std::vector<VersionedModelId>& models);
 
 std::vector<VersionedModelId> str_to_models(const std::string& model_str);
 
+std::vector<VersionedModelId> str_to_model_configs(const std::string& model_configs_str);
+
 bool set_current_model_version(redox::Redox& redis,
                                const std::string& model_name,
                                const std::string& version);
@@ -197,6 +199,13 @@ std::vector<VersionedModelId> get_all_models(redox::Redox& redis);
  */
 std::vector<std::string> get_linked_models(redox::Redox& redis,
                                            const std::string& app_name);
+
+/**
+ * Obtains the name of the endpoint associated with the specified serving
+ * module id
+ */
+std::string get_endpoint(redox::Redox& redis,
+                         const long serving_module_id);
 
 /**
  * Adds a container into the container table. This will
@@ -304,6 +313,17 @@ std::unordered_map<std::string, std::string> get_application(
     redox::Redox& redis, const std::string& app_name);
 
 /**
+ * Looks up an endpoint based on its name.
+ *
+ * \return Returns a map of endpoint attribute name-value pairs as
+ * strings. Any parsing of the attribute values from their string
+ * format (e.g. to a numerical representation) must be done by the
+ * caller of this function. 
+ */
+std::unordered_map<std::string, std::string> get_endpoint(
+    redox::Redox& redis, const std::string& endpoint_name);
+
+/**
  * Looks up an entry in the application table by the fully
  * specified Redis key.
  *
@@ -361,6 +381,18 @@ void subscribe_to_container_changes(
  * to differentiate between adds, updates, and deletes if necessary.
  */
 void subscribe_to_application_changes(
+    redox::Subscriber& subscriber,
+    std::function<void(const std::string&, const std::string&)> callback);
+
+/**
+ * Subscribes to changes in the endpoints table. The
+ * callback is called with the string key of the endpoint 
+ * that changed and the Redis event type. The key can
+ * be used to look up the new value. The message type identifies
+ * what type of change was detected. This allows subscribers
+ * to differentiate between adds, updates, and deletes if necessary.
+ */
+void subscribe_to_endpoint_changes(
     redox::Subscriber& subscriber,
     std::function<void(const std::string&, const std::string&)> callback);
 

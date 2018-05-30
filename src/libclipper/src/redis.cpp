@@ -169,6 +169,50 @@ std::vector<VersionedModelId> str_to_models(const std::string& model_str) {
   return models;
 }
 
+std::vector<VersionedModelId> str_to_model_configs(const std::string& model_configs_str) {
+  std::vector<std::unordered_map<std::string, std::string>> model_configs;
+
+  auto delim_start = 0;
+  auto delim_end = model_configs_str.find(ITEM_DELIMITER);
+
+  std::vector<std::string> serialized_configs;
+
+  while (delim_end != string::npos) {
+    serialized_configs.push_back(model_configs_str.substr(delim_start, delim_end - delim_start));
+    delim_start = delim_end + ITEM_DELIMITER.length();
+    delim_end = model_configs_str.find(ITEM_DELIMITER, delim_start);
+  }
+  // Tail case
+  serialized_configs.push_back(model_configs_str.substr(delim_start, delim_end - delim_start));
+
+  for(const auto &serialized_config : serialized_configs) {
+    std::unordered_map<std::string, std::string> model_config;
+
+    auto start = 0;
+    auto end = serialized_config.find(ITEM_PART_CONCATENATOR);
+
+    size_t key_idx = 0;
+    while (end != string::npos) {
+      config_key = SORTED_MODEL_CONFIG_KEYS[key_idx];
+      config_value = serialized_config.substr(start, end - start);
+      model_config.emplace(config_key, config_value);
+
+      start = end + ITEM_PART_CONCATENATOR.length();
+      end = serialized_config.find(ITEM_PART_CONCATENATOR, start);
+
+      key_idx += 1;
+    }
+    // Tail case
+    config_key = SORTED_MODEL_CONFIG_KEYS[key_idx];
+    config_value = serialized_config.substr(start, end - start);
+    model_config.emplace(config_key, config_value);
+
+    model_configs.push_back(model_config);
+  }
+
+  return model_configs;
+}
+
 bool set_current_model_version(redox::Redox& redis,
                                const std::string& model_name,
                                const std::string& version) {
@@ -226,6 +270,38 @@ std::vector<std::string> get_linked_models(redox::Redox& redis,
   }
 
   return linked_models;
+}
+
+std::string get_endpoint(redox::Redox& redis,
+                         const long serving_module_id) {
+  std::string serving_module_id_key = std::to_string(serving_module_id)
+
+  std::vector<std::string> linked_endpoints;
+  if (send_cmd_no_reply<string>(
+          redis, {"SELECT", std::to_string(REDIS_ENDPOINT_MODULES_LINKS_DB_NUM)})) {
+    auto result =
+        send_cmd_with_reply<std::vector<string>>(redis, {"SMEMBERS", serving_module_id_key});
+    if (result) {
+      linked_endpoints = *result;
+    } else {
+      log_error_formatted(LOGGING_TAG_REDIS,
+                          "Found no linked endpoint for serving module id {}", serving_module_id_key);
+    }
+  } else {
+    log_error_formatted(
+        LOGGING_TAG_REDIS,
+        "Redis encountered an error in searching for endpoint links for {}",
+        serving_module_id_key);
+  }
+
+  if (linked_endpoints.size() != 1) {
+    std::stringstream ss;
+    ss << "Expected to find exactly one linked endpoint for serving module id: " << serving_module_id
+       << ", found: " << linked_endpoints.size() << " instead";
+    throw std::runtime_error(ss.str());
+  }
+
+  return linked_endpoints[0];
 }
 
 bool add_model(Redox& redis, const VersionedModelId& model_id,
@@ -515,6 +591,23 @@ std::unordered_map<std::string, std::string> get_application(
   }
 }
 
+std::unordered_map<std::string, std::string> get_endpoint(
+    redox::Redox& redis, const std::string& endpoint_name) {
+  if (send_cmd_no_reply<string>(
+          redis, {"SELECT", std::to_string(REDIS_ENDPOINT_DB_NUM)})) {
+    std::vector<std::string> container_data;
+    auto result = send_cmd_with_reply<std::vector<std::string>>(
+        redis, {"HGETALL", endpoint_name});
+    if (result) {
+      endpoint_data = *result;
+    }
+
+    return parse_redis_map(endpoint_data);
+  } else {
+    return unordered_map<string, string>{};
+  }
+}
+
 std::unordered_map<std::string, std::string> get_application_by_key(
     redox::Redox& redis, const std::string& key) {
   // Applications just use their appname as a key.
@@ -575,6 +668,14 @@ void subscribe_to_application_changes(
     std::function<void(const std::string&, const std::string&)> callback) {
   std::string prefix = "";
   subscribe_to_keyspace_changes(REDIS_APPLICATION_DB_NUM, prefix, subscriber,
+                                std::move(callback));
+}
+
+void subscribe_to_endpoint_changes(
+    redox::Subscriber& subscriber,
+    std::function<void(const std::string&, const std::string&)> callback) {
+  std::string prefix = "";
+  subscribe_to_keyspace_changes(REDIS_ENDPOINT_DB_NUM, prefix, subscriber,
                                 std::move(callback));
 }
 
