@@ -106,6 +106,29 @@ class ModelContainer {
   size_t estimate(double budget);
 };
 
+namespace IterativeUpdater {
+
+  /**
+   * Given information about a data set's previous mean, std, and cardinality,
+   * as well as a new value, calculates the mean and std of the data set augmented by
+   * the new value
+   *
+   * @return A pair consisting of (augmented_mean, augmented_std) 
+   */
+  std::pair<double, double> calculate_new_mean_std(double prev_num_samples, double prev_mean, 
+                                                   double prev_std, double new_value) {
+      double new_num_samples = prev_num_samples + 1;
+      double new_mean = ((prev_num_samples * prev_mean) + new_value) / new_num_samples;
+
+      double old_s = std::pow(prev_std, 2) * prev_num_samples;
+      double new_s = old_s + ((new_num_samples / std::max(1.0, prev_num_samples)) *
+                              std::pow((new_mean - new_value), 2));
+      double new_std = std::sqrt(new_s, std::max(1.0, new_num_samples);
+
+      return std::make_pair(new_mean, new_std);
+    }
+}
+
 /// This is a lightweight wrapper around the map of active containers
 /// to make it threadsafe so it can be safely shared between threads between
 /// with a shared_ptr.

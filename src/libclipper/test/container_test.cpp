@@ -1,43 +1,76 @@
+#include <random>
+#include <chrono>
+
 #include <gtest/gtest.h>
 
 #include <clipper/containers.hpp>
+#include <clipper/threadpool.hpp>
 
 using namespace clipper;
 
 namespace {
 
-TEST(ModelContainerTests, AverageThroughputUpdatesCorrectlyFewSamples) {
+TEST(ModelContainerTests, BatchSizeDeterminationExploresCorrectly) {
   VersionedModelId model("test", "1");
   ModelContainer container(model, 0, 0, InputType::Doubles, DEFAULT_BATCH_SIZE);
-  std::array<long, 4> single_task_latencies_micros = {{500, 2000, 3000, 5000}};
-  long avg_latency = 0;
-  double avg_throughput_millis = 0;
-  for (long latency : single_task_latencies_micros) {
-    container.update_throughput(1, latency);
-    avg_throughput_millis += 1 / static_cast<double>(latency);
-    avg_latency += latency;
-  }
-  avg_throughput_millis = 1000 * (avg_throughput_millis / 4);
+  EstimatorFittingThreadPool::create_queue(model, 0);
 
-  ASSERT_DOUBLE_EQ(container.get_average_throughput_per_millisecond(),
-                   avg_throughput_millis);
+  long long base_latency = 500;
+  std::normal_distribution<double> sublinearity_distribution(.8, .05);
+  std::default_random_engine sublinearity_engine(
+      std::chrono::system_clock::now().time_since_epoch().count())
+
+  size_t last_batch_size = 1;
+  for (long long i = 1; i < 200; ++i) {
+    double sublinearity_factor = sublinearity_distribution(sublinearity_engine);
+    long long latency = static_cast<long long>(base_latency * sublinearity_factor); 
+    container.add_container(i, latency);
+
+    if (i % 10 == 0) {
+      Deadline deadline = std::chrono::system_clock::now() + std::chrono::microseconds(latency);
+      size_t batch_size = container.get_batch_size(deadline);
+      ASSERT_GT(batch_size, last_batch_size);
+      last_batch_size = batch_size;
+    }
+  }
 }
 
-TEST(ModelContainerTests, AverageThroughputUpdatesCorrectlyManySamples) {
-  VersionedModelId model("test", "1");
-  ModelContainer container(model, 0, 0, InputType::Doubles, DEFAULT_BATCH_SIZE);
-  double avg_throughput_millis = 0;
-  for (int i = 3; i < 103; i++) {
-    double throughput_millis = 1 / static_cast<double>(1000 * i);
-    avg_throughput_millis += throughput_millis;
-  }
-  avg_throughput_millis = 1000 * (avg_throughput_millis / 100);
-  for (int i = 1; i < 103; i++) {
-    container.update_throughput(1, 1000 * i);
-  }
-  ASSERT_DOUBLE_EQ(container.get_average_throughput_per_millisecond(),
-                   avg_throughput_millis);
+TEST(ModelContainerTests, IterativeMeanStdLatencyUpdatesArePerformedCorrectly) {
+  // std::vector<
 }
+
+// TEST(ModelContainerTests, AverageThroughputUpdatesCorrectlyFewSamples) {
+//   VersionedModelId model("test", "1");
+//   ModelContainer container(model, 0, 0, InputType::Doubles, DEFAULT_BATCH_SIZE);
+//   std::array<long, 4> single_task_latencies_micros = {{500, 2000, 3000, 5000}};
+//   long avg_latency = 0;
+//   double avg_throughput_millis = 0;
+//   for (long latency : single_task_latencies_micros) {
+//     container.update_throughput(1, latency);
+//     avg_throughput_millis += 1 / static_cast<double>(latency);
+//     avg_latency += latency;
+//   }
+//   avg_throughput_millis = 1000 * (avg_throughput_millis / 4);
+//
+//   ASSERT_DOUBLE_EQ(container.get_average_throughput_per_millisecond(),
+//                    avg_throughput_millis);
+// }
+//
+// TEST(ModelContainerTests, AverageThroughputUpdatesCorrectlyManySamples) {
+//   VersionedModelId model("test", "1");
+//   ModelContainer container(model, 0, 0, InputType::Doubles, DEFAULT_BATCH_SIZE);
+//   double avg_throughput_millis = 0;
+//   for (int i = 3; i < 103; i++) {
+//     double throughput_millis = 1 / static_cast<double>(1000 * i);
+//     avg_throughput_millis += throughput_millis;
+//   }
+//   avg_throughput_millis = 1000 * (avg_throughput_millis / 100);
+//   for (int i = 1; i < 103; i++) {
+//     container.update_throughput(1, 1000 * i);
+//   }
+//   ASSERT_DOUBLE_EQ(container.get_average_throughput_per_millisecond(),
+//                    avg_throughput_millis);
+// }
 
 TEST(ActiveContainerTests, AddContainer) {
   VersionedModelId m1 = VersionedModelId("m", "1");
