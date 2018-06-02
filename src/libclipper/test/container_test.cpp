@@ -1,6 +1,6 @@
 #include <chrono>
-#include <cstdlib>
 #include <cmath>
+#include <cstdlib>
 
 #include <gtest/gtest.h>
 
@@ -11,7 +11,8 @@ using namespace clipper;
 
 namespace {
 
-TEST(ModelContainerTests, BatchSizeDeterminationExploitsAdvantageousBatchSizeLatencyRelationship) {
+TEST(ModelContainerTests,
+     BatchSizeDeterminationExploitsAdvantageousBatchSizeLatencyRelationship) {
   VersionedModelId model("test", "1");
   ModelContainer container(model, 0, 0, InputType::Doubles, DEFAULT_BATCH_SIZE);
   EstimatorFittingThreadPool::create_queue(model, 0);
@@ -22,16 +23,17 @@ TEST(ModelContainerTests, BatchSizeDeterminationExploitsAdvantageousBatchSizeLat
   // constant, increasing the batch size will always
   // improve throughput. Therefore, the batch sizes emitted
   // by the batch size determination algorithm should
-  // increase monotonically with the latency budget 
+  // increase monotonically with the latency budget
   double decay_factor = .9;
 
   size_t last_batch_size = 1;
   for (long long i = 1; i < 200; ++i) {
-    long long latency = static_cast<long long>(i * base_latency * decay_factor); 
+    long long latency = static_cast<long long>(i * base_latency * decay_factor);
     container.add_processing_datapoint(i, latency);
 
     if (i % 10 == 0) {
-      Deadline deadline = std::chrono::system_clock::now() + std::chrono::microseconds(latency);
+      Deadline deadline =
+          std::chrono::system_clock::now() + std::chrono::microseconds(latency);
       size_t batch_size = container.get_batch_size(deadline).first;
       ASSERT_GT(batch_size, last_batch_size);
       last_batch_size = batch_size;
@@ -45,17 +47,20 @@ TEST(ModelContainerTests, IterativeMeanStdUpdatesPerformedCorrectly) {
   for (double i = 1; i <= 100; ++i) {
     values.push_back(i);
   }
-  
+
   double num_samples = 1;
   double iter_mean = values[0];
   double iter_std = 0;
- 
+
   for (size_t i = 1; i < values.size(); ++i) {
-    std::tie(iter_mean, iter_std) = IterativeUpdater::calculate_new_mean_std(num_samples, iter_mean, iter_std, values[i]);
+    std::tie(iter_mean, iter_std) = IterativeUpdater::calculate_new_mean_std(
+        num_samples, iter_mean, iter_std, values[i]);
     num_samples += 1;
   }
 
-  double cumulative_mean = static_cast<double>(std::accumulate(values.begin(), values.end(), 0)) / static_cast<double>(values.size());
+  double cumulative_mean =
+      static_cast<double>(std::accumulate(values.begin(), values.end(), 0)) /
+      static_cast<double>(values.size());
   double cumulative_var = 0;
   for (size_t i = 0; i < values.size(); ++i) {
     cumulative_var += std::pow((values[i] - cumulative_mean), 2);
@@ -63,8 +68,8 @@ TEST(ModelContainerTests, IterativeMeanStdUpdatesPerformedCorrectly) {
   cumulative_var /= values.size();
   double cumulative_std = std::sqrt(cumulative_var);
 
-  ASSERT_LE(std::abs(iter_mean - cumulative_mean), .00001); 
-  ASSERT_LE(std::abs(iter_std - cumulative_std), .00001); 
+  ASSERT_LE(std::abs(iter_mean - cumulative_mean), .00001);
+  ASSERT_LE(std::abs(iter_std - cumulative_std), .00001);
 }
 
 TEST(ActiveContainerTests, AddContainer) {

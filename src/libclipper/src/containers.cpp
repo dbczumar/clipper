@@ -36,8 +36,8 @@ ModelContainer::ModelContainer(VersionedModelId model, int container_id,
       latency_hist_("container:" + model.serialize() + ":" +
                         std::to_string(replica_id) + ":prediction_latency",
                     "microseconds", HISTOGRAM_SAMPLE_SIZE),
-      active_(std::make_shared<bool>(true)), 
-      activity_mtx_(std::make_shared<std::mutex>()), 
+      active_(std::make_shared<bool>(true)),
+      activity_mtx_(std::make_shared<std::mutex>()),
       max_batch_size_(1),
       max_latency_(0),
       // These distribution constants were selected based on the empirical
@@ -91,20 +91,22 @@ void ModelContainer::add_processing_datapoint(
 
   max_latency_ = std::max(processing_latency_micros, max_latency_);
 
-  EstimatorFittingThreadPool::submit_job(model_, replica_id_, [this, 
-                                                               container_activity_mtx = activity_mtx_, 
-                                                               container_active = active_]() {
-    std::lock_guard<std::mutex> activity_lock(*container_activity_mtx);
-    if (!(*container_active)) {
-      return;
-    }
-    try {
-      fit_estimator();
-    } catch (std::exception const &ex) {
-      log_error_formatted(LOGGING_TAG_CONTAINERS,
-                          "Error fitting batch size estimator: {}", ex.what());
-    }
-  });
+  EstimatorFittingThreadPool::submit_job(
+      model_, replica_id_,
+      [this, container_activity_mtx = activity_mtx_,
+       container_active = active_]() {
+        std::lock_guard<std::mutex> activity_lock(*container_activity_mtx);
+        if (!(*container_active)) {
+          return;
+        }
+        try {
+          fit_estimator();
+        } catch (std::exception const &ex) {
+          log_error_formatted(LOGGING_TAG_CONTAINERS,
+                              "Error fitting batch size estimator: {}",
+                              ex.what());
+        }
+      });
 }
 
 ModelContainer::LatencyInfo ModelContainer::update_mean_std(
@@ -115,7 +117,8 @@ ModelContainer::LatencyInfo ModelContainer::update_mean_std(
 
   double new_mu;
   double new_std;
-  std::tie(new_mu, new_std) = IterativeUpdater::calculate_new_mean_std(info_size, mu, std, new_latency);
+  std::tie(new_mu, new_std) =
+      IterativeUpdater::calculate_new_mean_std(info_size, mu, std, new_latency);
 
   return std::make_tuple(info_size + 1, new_mu, new_std);
 }
