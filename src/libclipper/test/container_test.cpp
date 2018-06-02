@@ -1,5 +1,6 @@
-#include <random>
 #include <chrono>
+#include <cstdlib>
+#include <cmath>
 
 #include <gtest/gtest.h>
 
@@ -10,67 +11,61 @@ using namespace clipper;
 
 namespace {
 
-TEST(ModelContainerTests, BatchSizeDeterminationExploresCorrectly) {
+TEST(ModelContainerTests, BatchSizeDeterminationExploitsAdvantageousBatchSizeLatencyRelationship) {
   VersionedModelId model("test", "1");
   ModelContainer container(model, 0, 0, InputType::Doubles, DEFAULT_BATCH_SIZE);
   EstimatorFittingThreadPool::create_queue(model, 0);
 
   long long base_latency = 500;
-  std::normal_distribution<double> sublinearity_distribution(.8, .05);
-  std::default_random_engine sublinearity_engine(
-      std::chrono::system_clock::now().time_since_epoch().count())
+  // The factor used to enforce a throughput benefit
+  // associated with batching. Because this factor is
+  // constant, increasing the batch size will always
+  // improve throughput. Therefore, the batch sizes emitted
+  // by the batch size determination algorithm should
+  // increase monotonically with the latency budget 
+  double decay_factor = .9;
 
   size_t last_batch_size = 1;
   for (long long i = 1; i < 200; ++i) {
-    double sublinearity_factor = sublinearity_distribution(sublinearity_engine);
-    long long latency = static_cast<long long>(base_latency * sublinearity_factor); 
-    container.add_container(i, latency);
+    long long latency = static_cast<long long>(i * base_latency * decay_factor); 
+    container.add_processing_datapoint(i, latency);
 
     if (i % 10 == 0) {
       Deadline deadline = std::chrono::system_clock::now() + std::chrono::microseconds(latency);
-      size_t batch_size = container.get_batch_size(deadline);
+      size_t batch_size = container.get_batch_size(deadline).first;
       ASSERT_GT(batch_size, last_batch_size);
       last_batch_size = batch_size;
     }
   }
 }
 
-TEST(ModelContainerTests, IterativeMeanStdLatencyUpdatesArePerformedCorrectly) {
-  // std::vector<
-}
+TEST(ModelContainerTests, IterativeMeanStdUpdatesPerformedCorrectly) {
+  std::vector<double> values;
+  values.reserve(100);
+  for (double i = 1; i <= 100; ++i) {
+    values.push_back(i);
+  }
+  
+  double num_samples = 1;
+  double iter_mean = values[0];
+  double iter_std = 0;
+ 
+  for (size_t i = 1; i < values.size(); ++i) {
+    std::tie(iter_mean, iter_std) = IterativeUpdater::calculate_new_mean_std(num_samples, iter_mean, iter_std, values[i]);
+    num_samples += 1;
+  }
 
-// TEST(ModelContainerTests, AverageThroughputUpdatesCorrectlyFewSamples) {
-//   VersionedModelId model("test", "1");
-//   ModelContainer container(model, 0, 0, InputType::Doubles, DEFAULT_BATCH_SIZE);
-//   std::array<long, 4> single_task_latencies_micros = {{500, 2000, 3000, 5000}};
-//   long avg_latency = 0;
-//   double avg_throughput_millis = 0;
-//   for (long latency : single_task_latencies_micros) {
-//     container.update_throughput(1, latency);
-//     avg_throughput_millis += 1 / static_cast<double>(latency);
-//     avg_latency += latency;
-//   }
-//   avg_throughput_millis = 1000 * (avg_throughput_millis / 4);
-//
-//   ASSERT_DOUBLE_EQ(container.get_average_throughput_per_millisecond(),
-//                    avg_throughput_millis);
-// }
-//
-// TEST(ModelContainerTests, AverageThroughputUpdatesCorrectlyManySamples) {
-//   VersionedModelId model("test", "1");
-//   ModelContainer container(model, 0, 0, InputType::Doubles, DEFAULT_BATCH_SIZE);
-//   double avg_throughput_millis = 0;
-//   for (int i = 3; i < 103; i++) {
-//     double throughput_millis = 1 / static_cast<double>(1000 * i);
-//     avg_throughput_millis += throughput_millis;
-//   }
-//   avg_throughput_millis = 1000 * (avg_throughput_millis / 100);
-//   for (int i = 1; i < 103; i++) {
-//     container.update_throughput(1, 1000 * i);
-//   }
-//   ASSERT_DOUBLE_EQ(container.get_average_throughput_per_millisecond(),
-//                    avg_throughput_millis);
-// }
+  double cumulative_mean = static_cast<double>(std::accumulate(values.begin(), values.end(), 0)) / static_cast<double>(values.size());
+  double cumulative_var = 0;
+  for (size_t i = 0; i < values.size(); ++i) {
+    cumulative_var += std::pow((values[i] - cumulative_mean), 2);
+  }
+  cumulative_var /= values.size();
+  double cumulative_std = std::sqrt(cumulative_var);
+
+  ASSERT_LE(std::abs(iter_mean - cumulative_mean), .00001); 
+  ASSERT_LE(std::abs(iter_std - cumulative_std), .00001); 
+}
 
 TEST(ActiveContainerTests, AddContainer) {
   VersionedModelId m1 = VersionedModelId("m", "1");

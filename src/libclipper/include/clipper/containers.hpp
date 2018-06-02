@@ -6,6 +6,7 @@ constexpr int DEFAULT_BATCH_SIZE = -1;
 #include <memory>
 #include <random>
 #include <unordered_map>
+#include <cmath>
 
 #include <boost/circular_buffer.hpp>
 
@@ -32,7 +33,7 @@ using BatchSizeInfo = std::pair<size_t, BatchSizeDeterminationMethod>;
 
 class ModelContainer {
  public:
-  ~ModelContainer() = default;
+  ~ModelContainer();
   ModelContainer(VersionedModelId model, int container_id, int replica_id,
                  InputType input_type, int batch_size);
   // disallow copy
@@ -71,6 +72,9 @@ class ModelContainer {
   // standard deviation relation is defined here:
   // https://link.springer.com/article/10.1007%2FBF02262936
   LatencyInfo update_mean_std(LatencyInfo &info, double new_latency);
+
+  std::shared_ptr<bool> active_;
+  std::shared_ptr<std::mutex> activity_mtx_;
 
   std::atomic_bool connected_{true};
 
@@ -115,7 +119,7 @@ namespace IterativeUpdater {
    *
    * @return A pair consisting of (augmented_mean, augmented_std) 
    */
-  std::pair<double, double> calculate_new_mean_std(double prev_num_samples, double prev_mean, 
+  inline std::pair<double, double> calculate_new_mean_std(double prev_num_samples, double prev_mean, 
                                                    double prev_std, double new_value) {
       double new_num_samples = prev_num_samples + 1;
       double new_mean = ((prev_num_samples * prev_mean) + new_value) / new_num_samples;
@@ -123,11 +127,11 @@ namespace IterativeUpdater {
       double old_s = std::pow(prev_std, 2) * prev_num_samples;
       double new_s = old_s + ((new_num_samples / std::max(1.0, prev_num_samples)) *
                               std::pow((new_mean - new_value), 2));
-      double new_std = std::sqrt(new_s, std::max(1.0, new_num_samples);
+      double new_std = std::sqrt(new_s / std::max(1.0, new_num_samples));
 
       return std::make_pair(new_mean, new_std);
     }
-}
+} // namespace IterativeUpdater
 
 /// This is a lightweight wrapper around the map of active containers
 /// to make it threadsafe so it can be safely shared between threads between
